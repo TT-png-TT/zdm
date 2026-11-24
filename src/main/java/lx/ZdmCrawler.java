@@ -233,11 +233,9 @@ public class ZdmCrawler {
         //从数据库中取出已推送的优惠信息id
         Collection<String> pushedIds = ZdmMapper.pushedIds();
 
-        //执行其他过滤规则
+        //执行其他过滤规则：不再按点赞数/评论数设门槛，零赞零评也保留；只排除“前xxx名”抢购和已推送过的
         List<Zdm> filtered = StreamUtils.filter(zdms, z ->
-                Integer.parseInt(z.getVoted()) > minVoted //值的数量
-                        && Integer.parseInt(z.getComments()) > minComments //评论的数量
-                        && !z.getPrice().contains("前") //不是前xxx名的耍猴抢购
+                !z.getPrice().contains("前") //不是前xxx名的耍猴抢购
                         && !pushedIds.contains(z.getArticleId()) //不是已经推送过的
         );
 
