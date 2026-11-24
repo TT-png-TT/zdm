@@ -47,10 +47,13 @@ jobs:
       run: |
         if [ -f database.db ]; then
           LAST_COUNT=$(sqlite3 database.db "SELECT COUNT(*) FROM ZDM;")
+          LAST_HIST=$(sqlite3 database.db "SELECT COUNT(*) FROM PRICE_HISTORY;" 2>/dev/null || echo 0)
         else
           LAST_COUNT=0
+          LAST_HIST=0
         fi
         echo "last_count=$LAST_COUNT" >> $GITHUB_OUTPUT
+        echo "last_hist=$LAST_HIST" >> $GITHUB_OUTPUT
         if [ -f database_old.db ]; then
           cp database_old.db database.db
         fi
@@ -69,6 +72,8 @@ jobs:
         minComments: 0
         # 优惠信息数量>MIN_PUSH_SIZE就会发邮件,否则积累到下一次触发任务再决定是否推送. 不建议填太小的数字,避免邮件太多了
         MIN_PUSH_SIZE: 5
+        # 比价窗口(天)：仅与近N天内同款历史最低价比较；历史为空时首次出现作为基线推送
+        priceHistoryDays: 90
         # 邮箱的smtp服务器地址(示例给出的是qq邮箱的配置,非qq邮箱需要进行修改)
         emailHost: smtp.qq.com
         # 邮箱smtp服务端口
@@ -82,18 +87,22 @@ jobs:
         # true:下载阶段打印出详细信息(待推送的优惠信息列表,过滤时使用的黑白词),因文本量比较大,在调通项目后可以改为false
         detail: false
       run: java -jar zdm.jar
-    # 检查数据库中新增行数是否超过提交阈值
+    # 检查数据库中新增行数是否超过提交阈值(优惠表与价格历史表任一满足即提交)
     - name: check database changes
       id: commit_check
       env:
         # 提交阈值,0代表每次运行都会生成commit记录
-        COMMIT_THRESHOLD: 50
+        COMMIT_THRESHOLD: 5
       run: |
         LAST_COUNT=${{ steps.db_copy.outputs.last_count }}
+        LAST_HIST=${{ steps.db_copy.outputs.last_hist }}
         CURRENT_COUNT=$(sqlite3 database.db "SELECT COUNT(*) FROM ZDM;")
+        CURRENT_HIST=$(sqlite3 database.db "SELECT COUNT(*) FROM PRICE_HISTORY;" 2>/dev/null || echo 0)
         NEW_ROWS=$((CURRENT_COUNT - LAST_COUNT))
+        NEW_HIST=$((CURRENT_HIST - LAST_HIST))
         echo "Last count: $LAST_COUNT , Current count: $CURRENT_COUNT , New rows: $NEW_ROWS"
-        if [ $NEW_ROWS -ge $COMMIT_THRESHOLD ]; then
+        echo "Last hist: $LAST_HIST , Current hist: $CURRENT_HIST , New hist: $NEW_HIST"
+        if [ $NEW_ROWS -ge $COMMIT_THRESHOLD ] || [ $NEW_HIST -ge $COMMIT_THRESHOLD ]; then
           echo "should_commit=true" >> $GITHUB_OUTPUT
         fi
         cp database.db database_old.db
