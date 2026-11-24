@@ -13,6 +13,8 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.apache.commons.lang3.RandomUtils;
 
@@ -21,6 +23,8 @@ import lx.model.Crawlable;
 import static lx.utils.Const.USER_AGENTS;
 
 public class Utils {
+
+    private static final Pattern PRICE_PATTERN = Pattern.compile("\\d+(\\.\\d+)?");
 
     public static String buildMessage(List<? extends Crawlable> list) {
         StringBuilder s = new StringBuilder();
@@ -99,5 +103,34 @@ public class Utils {
             e.printStackTrace();
             throw new RuntimeException("接口调用失败,程序终止");
         }
+    }
+
+    /**
+     * 从爆料价格字符串中解析出数值价格；解析失败返回 null。
+     * 区间价(如 199-299)取第一个数字；带千分位逗号/货币符号/单位均兼容。
+     */
+    public static Double parsePrice(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return null;
+        }
+        String s = raw.replaceAll("[,，]", "");
+        Matcher matcher = PRICE_PATTERN.matcher(s);
+        if (!matcher.find()) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(matcher.group());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 同款键：商城 + 归一化标题(转小写、去除空白与标点符号)。
+     */
+    public static String matchKey(String mall, String title) {
+        String m = mall == null ? "" : mall.toLowerCase().replaceAll("[\\s\\p{Punct}]+", "");
+        String t = title == null ? "" : title.toLowerCase().replaceAll("[\\s\\p{Punct}]+", "");
+        return m + "|" + t;
     }
 }
