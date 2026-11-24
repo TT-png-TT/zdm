@@ -52,7 +52,9 @@ import cn.hutool.http.HttpException;
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
 import cn.hutool.http.HttpUtil;
+import lx.mapper.PriceRecordMapper;
 import lx.mapper.ZdmMapper;
+import lx.model.PriceRecord;
 import lx.model.Zdm;
 import lx.utils.StreamUtils;
 import lx.utils.Utils;
@@ -88,7 +90,8 @@ public class ZdmCrawler {
         int maxPageSize = Integer.parseInt(envMap.getOrDefault("maxPageSize", "10")),
                 minVoted = Integer.parseInt(envMap.getOrDefault("minVoted", "0")),
                 minComments = Integer.parseInt(envMap.getOrDefault("minComments", "0")),
-                minPushSize = Integer.parseInt(envMap.getOrDefault("MIN_PUSH_SIZE", "0"));
+                minPushSize = Integer.parseInt(envMap.getOrDefault("MIN_PUSH_SIZE", "0")),
+                priceHistoryDays = intEnv("priceHistoryDays", 90);
         boolean detail = "true".equals(envMap.getOrDefault("detail", "false"));
 
         //获取待推送的优惠信息
@@ -97,6 +100,10 @@ public class ZdmCrawler {
         //根据各项规则执行过滤逻辑
         zdms = processFilter(zdms, minVoted, minComments, detail);
         System.out.println("过滤后剩余数据条数" + zdms.size());
+
+        //比价：首次出现推一条当基线；有历史后仅当前价 <= 近N天历史最低才保留，其余丢弃
+        zdms = applyPriceHistory(zdms, priceHistoryDays);
+        System.out.println("比价过滤后剩余数据条数" + zdms.size());
 
         //在推送之前先入库数据,pushed字段默认为0(未推送)
         ZdmMapper.saveOrUpdateBatch(zdms);
@@ -120,6 +127,47 @@ public class ZdmCrawler {
             part.forEach(o -> o.setPushed(true));
             ZdmMapper.saveOrUpdateBatch(part);
         });
+    }
+
+    /**
+     * 比价过滤：解析价格后与近 days 天内同款历史最低比较。
+     * 历史为空(首次出现) -> 保留作为基线；当前价 <= 历史最低 -> 保留；高于历史最低 -> 丢弃。
+     * 无论是否推送，本次观测都会写入价格历史表，供后续比较。
+     */
+    private static List<Zdm> applyPriceHistory(Collection<Zdm> zdms, int days) {
+        List<Zdm> keep = new ArrayList<>();
+        for (Zdm z : zdms) {
+            Double priceValue = Utils.parsePrice(z.getPrice());
+            if (priceValue == null) {
+                System.out.println("价格无法解析,跳过: " + z.getTitle() + " | price=" + z.getPrice());
+                continue;
+            }
+            String key = Utils.matchKey(z.getArticleMall(), z.getTitle());
+            Double historyMin = PriceRecordMapper.minPriceSince(key, days);
+
+            //先查历史再写入本次观测,避免本次价格被计入历史最低
+            PriceRecord record = new PriceRecord();
+            record.setId(z.getArticleId());
+            record.setMatchKey(key);
+            record.setPriceValue(priceValue);
+            record.setArticleId(z.getArticleId());
+            record.setTitle(z.getTitle());
+            record.setMall(z.getArticleMall());
+            record.setUrl(z.getUrl());
+            record.setObservedAt(LocalDateTime.now().toString());
+            PriceRecordMapper.save(record);
+
+            if (historyMin == null) {
+                System.out.println("首次出现,作为基线推送: " + z.getTitle() + " | price=" + z.getPrice());
+                keep.add(z);
+            } else if (priceValue <= historyMin) {
+                System.out.println("达到/跌破历史最低(" + historyMin + "),推送: " + z.getTitle() + " | price=" + z.getPrice());
+                keep.add(z);
+            } else {
+                System.out.println("高于历史最低(" + historyMin + "),不推: " + z.getTitle() + " | price=" + z.getPrice());
+            }
+        }
+        return keep;
     }
 
     private static Collection<Zdm> obtainUnpushedArticles(int maxPageSize) {
