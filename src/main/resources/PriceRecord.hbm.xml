@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD 3.0//EN" "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
+<hibernate-mapping>
+    <class name="lx.model.PriceRecord" table="PRICE_HISTORY">
+        <id name="id" column="id" type="string">
+            <generator class="assigned"/>
+        </id>
+        <property name="matchKey" column="match_key" type="string"/>
+        <property name="priceValue" column="price_value" type="double"/>
+        <property name="articleId" column="article_id" type="string"/>
+        <property name="title" column="title" type="string"/>
+        <property name="mall" column="mall" type="string"/>
+        <property name="url" column="url" type="string"/>
+        <property name="observedAt" column="observed_at" type="string"/>
+    </class>
+</hibernate-mapping>
