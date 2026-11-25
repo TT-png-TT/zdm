@@ -30,22 +30,27 @@ public class PriceRecordMapper {
 
     /**
      * 查询指定同款键在近 days 天内的历史最低价格；无记录返回 null。
+     * 列表取回后在 Java 侧取最低，避免不同 SQLite 方言下聚合函数的兼容问题。
      */
     public static Double minPriceSince(String matchKey, int days) {
         try (Session session = HibernateUtil.getSessionFactory()) {
             HibernateCriteriaBuilder builder = session.getCriteriaBuilder();
-            JpaCriteriaQuery<Double> query = builder.createQuery(Double.class);
+            JpaCriteriaQuery<PriceRecord> query = builder.createQuery(PriceRecord.class);
             Root<PriceRecord> root = query.from(PriceRecord.class);
             String threshold = LocalDateTime.now().minusDays(days).toString();
             JpaPredicate predicate = builder.and(
                     builder.equal(root.get("matchKey"), matchKey),
                     builder.greaterThanOrEqualTo(root.get("observedAt"), threshold));
-            query.select(builder.min(root.get("priceValue"))).where(predicate);
-            List<Double> result = session.createQuery(query).list();
-            if (result.isEmpty()) {
-                return null;
+            query.select(root).where(predicate);
+            List<PriceRecord> list = session.createQuery(query).list();
+            Double min = null;
+            for (PriceRecord record : list) {
+                Double v = record.getPriceValue();
+                if (v != null && (min == null || v < min)) {
+                    min = v;
+                }
             }
-            return result.get(0);
+            return min;
         }
     }
 }
