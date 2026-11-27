@@ -12,11 +12,15 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.apache.commons.lang3.RandomUtils;
+
+import com.alibaba.fastjson.JSONObject;
 
 import lx.model.Crawlable;
 
@@ -47,6 +51,26 @@ public class Utils {
         } catch (Exception e) {
             e.printStackTrace();
             throw new IllegalArgumentException(path + "文件读取失败");
+        }
+        return res;
+    }
+
+    /**
+     * 读取词表文件, 文件不存在或读取异常时返回空集合(不抛异常)。
+     * 用于可选配置, 比如 tag_words.txt 不存在时就代表关闭标签过滤。
+     */
+    public static HashSet<String> readFileQuietly(String path) {
+        HashSet<String> res = new HashSet<>();
+        try (FileInputStream in = new FileInputStream(path);
+             InputStreamReader reader = new InputStreamReader(in, StandardCharsets.UTF_8);
+             BufferedReader bufferedReader = new BufferedReader(reader)) {
+            String lineTxt;
+            while ((lineTxt = bufferedReader.readLine()) != null) {
+                res.add(lineTxt.trim());
+            }
+            res.removeIf(String::isBlank);
+        } catch (Exception e) {
+            System.out.println("未找到或读取失败: " + path + ", 按空处理");
         }
         return res;
     }
@@ -132,5 +156,34 @@ public class Utils {
         String m = mall == null ? "" : mall.toLowerCase().replaceAll("[\\s\\p{Punct}]+", "");
         String t = title == null ? "" : title.toLowerCase().replaceAll("[\\s\\p{Punct}]+", "");
         return m + "|" + t;
+    }
+
+    /**
+     * 抽取接口返回的角标标签名(去重后用逗号连接)。
+     * 两个数组通常是 article_tags 与 article_tese_tags, 元素形如 {"name":"新低"}。
+     */
+    public static String joinTagNames(List<JSONObject> first, List<JSONObject> second) {
+        Set<String> names = new LinkedHashSet<>();
+        collectTagNames(first, names);
+        collectTagNames(second, names);
+        return String.join(",", names);
+    }
+
+    private static void collectTagNames(List<JSONObject> src, Set<String> out) {
+        if (src == null) {
+            return;
+        }
+        for (JSONObject o : src) {
+            if (o == null) {
+                continue;
+            }
+            String name = o.getString("name");
+            if (name == null || name.trim().isEmpty()) {
+                name = o.getString("title");
+            }
+            if (name != null && !name.trim().isEmpty()) {
+                out.add(name.trim());
+            }
+        }
     }
 }
