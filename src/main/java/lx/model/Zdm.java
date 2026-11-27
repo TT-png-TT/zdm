@@ -10,8 +10,10 @@ import javax.persistence.Entity;
 import javax.persistence.Id;
 import javax.persistence.Table;
 import javax.persistence.Transient;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 @Data
 @FieldDefaults(level = AccessLevel.PRIVATE)
@@ -64,8 +66,16 @@ public class Zdm implements Crawlable {
     Boolean pushed;
 
     /**
-     * 平台角标标签, 接口里是对象数组, 元素形如 {"name":"新低"}
-     * article_tags 是常规角标, article_tese_tags 是特色角标(白菜价/绝对值这类常出现在这里)
+     * 平台角标(接口字段 zhifa_tag), 正常是 {"name":"历史低价","url":...}
+     * 没有角标时可能是字符串"无", 或者整个字段缺失, 所以用 Object 接
+     */
+    @Transient
+    @JSONField(name = "zhifa_tag")
+    Object zhifaTag;
+
+    /**
+     * 兼容另一种返回结构: article_tags / article_tese_tags 数组, 元素形如 {"name":"新低"}
+     * 当前取数接口没有这两个字段, 保留是为了接口变动时不用再改代码
      */
     @Transient
     @JSONField(name = "article_tags", alternateNames = {"article_tag"})
@@ -75,15 +85,74 @@ public class Zdm implements Crawlable {
     @JSONField(name = "article_tese_tags")
     List<JSONObject> teseTags;
 
-    //由两个标签数组抽取出的标签文本(多个用逗号连接), 只用于标签过滤与展示, 不持久化
+    //已抽取的标签文本(逗号分隔), 不持久化
     @Transient
     String tags;
 
+    /**
+     * 合并所有来源的角标名(zhifa_tag / article_tags / article_tese_tags), 去重后用逗号连接。
+     * 标签过滤和邮件展示都读这个方法, 所以无论接口改用哪个字段, 只要在下面加一个收集方法就行。
+     */
+    public String getTags() {
+        Set<String> names = new LinkedHashSet<>();
+        if (tags != null) {
+            for (String s : tags.split(",")) {
+                String t = s == null ? "" : s.trim();
+                if (!t.isEmpty() && !"无".equals(t)) {
+                    names.add(t);
+                }
+            }
+        }
+        collectZhifaTag(zhifaTag, names);
+        collectNames(articleTags, names);
+        collectNames(teseTags, names);
+        return String.join(",", names);
+    }
+
+    private static void collectZhifaTag(Object raw, Set<String> out) {
+        if (raw == null) {
+            return;
+        }
+        String name = null;
+        if (raw instanceof JSONObject) {
+            name = ((JSONObject) raw).getString("name");
+        } else if (raw instanceof String) {
+            name = (String) raw;
+        }
+        if (name == null) {
+            return;
+        }
+        name = name.trim();
+        if (name.isEmpty() || "无".equals(name)) {
+            return;
+        }
+        out.add(name);
+    }
+
+    private static void collectNames(List<JSONObject> src, Set<String> out) {
+        if (src == null) {
+            return;
+        }
+        for (JSONObject o : src) {
+            if (o == null) {
+                continue;
+            }
+            String name = o.getString("name");
+            if (name == null || name.trim().isEmpty()) {
+                name = o.getString("title");
+            }
+            if (name != null && !name.trim().isEmpty()) {
+                out.add(name.trim());
+            }
+        }
+    }
+
     @Override
     public String toHtmlTr() {
-        String tagHtml = (tags == null || tags.trim().isEmpty())
+        String tagText = getTags();
+        String tagHtml = tagText.isEmpty()
                 ? ""
-                : "<br/><span style='color:#e4393c;font-size:12px'>【" + tags + "】</span>";
+                : "<br/><span style='color:#e4393c;font-size:12px'>【" + tagText + "】</span>";
         return "<tr>" +
                 "<td><img src='" + picUrl + "'/></td>" +
                 "<td>" + "<a target='_blank' href='" + url + "'>" + title + "</a>" + tagHtml + "</td>" +
