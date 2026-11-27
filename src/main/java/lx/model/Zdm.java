@@ -1,5 +1,6 @@
 package lx.model;
 
+import com.alibaba.fastjson.JSONObject;
 import com.alibaba.fastjson.annotation.JSONField;
 import lombok.AccessLevel;
 import lombok.Data;
@@ -9,6 +10,7 @@ import javax.persistence.Entity;
 import javax.persistence.Id;
 import javax.persistence.Table;
 import javax.persistence.Transient;
+import java.util.List;
 import java.util.Objects;
 
 @Data
@@ -61,11 +63,30 @@ public class Zdm implements Crawlable {
     //是否已推送
     Boolean pushed;
 
+    /**
+     * 平台角标标签, 接口里是对象数组, 元素形如 {"name":"新低"}
+     * article_tags 是常规角标, article_tese_tags 是特色角标(白菜价/绝对值这类常出现在这里)
+     */
+    @Transient
+    @JSONField(name = "article_tags", alternateNames = {"article_tag"})
+    List<JSONObject> articleTags;
+
+    @Transient
+    @JSONField(name = "article_tese_tags")
+    List<JSONObject> teseTags;
+
+    //由两个标签数组抽取出的标签文本(多个用逗号连接), 只用于标签过滤与展示, 不持久化
+    @Transient
+    String tags;
+
     @Override
     public String toHtmlTr() {
+        String tagHtml = (tags == null || tags.trim().isEmpty())
+                ? ""
+                : "<br/><span style='color:#e4393c;font-size:12px'>【" + tags + "】</span>";
         return "<tr>" +
                 "<td><img src='" + picUrl + "'/></td>" +
-                "<td>" + "<a target='_blank' href='" + url + "'>" + title + "</a></td>" +
+                "<td>" + "<a target='_blank' href='" + url + "'>" + title + "</a>" + tagHtml + "</td>" +
                 "<td>" + price + "</td>" +
                 "<td>" + voted + "/" + comments + "</td>" +
                 "<td>" + articleMall + "</td>" +
