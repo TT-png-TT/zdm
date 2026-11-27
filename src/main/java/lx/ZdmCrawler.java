@@ -101,9 +101,9 @@ public class ZdmCrawler {
         zdms = processFilter(zdms, minVoted, minComments, detail);
         System.out.println("过滤后剩余数据条数" + zdms.size());
 
-        //比价：首次出现推一条当基线；有历史后仅当前价 <= 近N天历史最低才保留，其余丢弃
-        zdms = applyPriceHistory(zdms, priceHistoryDays);
-        System.out.println("比价过滤后剩余数据条数" + zdms.size());
+        //标签 + 比价：标签门槛(新低/白菜价等)与历史最低比价叠加, 具体模式由 tagFilterMode 控制
+        zdms = applyTagAndPriceFilter(zdms, priceHistoryDays, detail);
+        System.out.println("标签/比价过滤后剩余数据条数" + zdms.size());
 
         //在推送之前先入库数据,pushed字段默认为0(未推送)
         ZdmMapper.saveOrUpdateBatch(zdms);
@@ -130,18 +130,45 @@ public class ZdmCrawler {
     }
 
     /**
-     * 比价过滤：解析价格后与近 days 天内同款历史最低比较。
-     * 历史为空(首次出现) -> 保留作为基线；当前价 <= 历史最低 -> 保留；高于历史最低 -> 丢弃。
-     * 无论是否推送，本次观测都会写入价格历史表，供后续比较。
+     * 标签 + 比价过滤。
+     *
+     * 标签部分：读 ./tag_words.txt, 命中任意一个词(子串匹配)即视为“带目标角标”(新低/史低/白菜价等)。
+     * 比价部分：解析价格后与近 days 天内同款历史最低比较，首次出现视为基线。
+     * tagFilterMode:
+     * - and(默认)：标签命中且达到历史最低才推
+     * - only：只要标签命中就推(不再看自建历史最低)
+     *
+     * 无论是否推送，只要价格能解析，本次观测都会写入价格历史表，保证历史库尽量完整。
      */
-    private static List<Zdm> applyPriceHistory(Collection<Zdm> zdms, int days) {
+    private static List<Zdm> applyTagAndPriceFilter(Collection<Zdm> zdms, int days, boolean detail) {
+        HashSet<String> tagWords = Utils.readFileQuietly("./tag_words.txt");
+        String tagMode = System.getenv().getOrDefault("tagFilterMode", "and").trim().toLowerCase();
+        boolean tagOnly = "only".equals(tagMode);
+
+        //兜底：如果配了词表但抓回来的数据全都没有标签字段, 说明接口未返回角标, 则本次关闭标签过滤, 避免全部被误丢
+        if (!tagWords.isEmpty()) {
+            long withTag = zdms.stream().filter(z -> z.getTags() != null && !z.getTags().trim().isEmpty()).count();
+            if (withTag == 0) {
+                System.out.println("警告: 已配置 tag_words.txt, 但本次抓取的数据均未带标签, 跳过标签过滤(降级为仅比价)");
+                tagWords.clear();
+            }
+        }
+        System.out.println(tagWords.isEmpty()
+                ? "标签过滤: 关闭"
+                : "标签过滤: 开启(" + (tagOnly ? "only" : "and") + "), 词表=" + String.join(",", tagWords));
+
         List<Zdm> keep = new ArrayList<>();
         for (Zdm z : zdms) {
+            String tagText = z.getTags() == null ? "" : z.getTags();
+            boolean tagHit = tagWords.isEmpty()
+                    || StreamUtils.findFirst(tagWords, w -> tagText.contains(w)) != null;
+
             Double priceValue = Utils.parsePrice(z.getPrice());
             if (priceValue == null) {
                 System.out.println("价格无法解析,跳过: " + z.getTitle() + " | price=" + z.getPrice());
                 continue;
             }
+
             String key = Utils.matchKey(z.getArticleMall(), z.getTitle());
             Double historyMin = PriceRecordMapper.minPriceSince(key, days);
 
@@ -157,14 +184,24 @@ public class ZdmCrawler {
             record.setObservedAt(LocalDateTime.now().toString());
             PriceRecordMapper.save(record);
 
-            if (historyMin == null) {
-                System.out.println("首次出现,作为基线推送: " + z.getTitle() + " | price=" + z.getPrice());
+            boolean priceKeep = historyMin == null || priceValue <= historyMin;
+            //用标签做门槛时, and模式下如果连标签都没有就不必再打印比价结论
+            boolean push = tagWords.isEmpty() ? priceKeep : (tagOnly ? tagHit : (tagHit && priceKeep));
+
+            if (push) {
+                String reason = tagOnly
+                        ? "命中标签[" + tagText + "]"
+                        : (historyMin == null
+                        ? "首次出现(基线),标签[" + tagText + "]"
+                        : "命中标签[" + tagText + "]且达到/跌破历史最低(" + historyMin + ")");
+                System.out.println("推送: " + reason + " | " + z.getTitle() + " | price=" + z.getPrice());
                 keep.add(z);
-            } else if (priceValue <= historyMin) {
-                System.out.println("达到/跌破历史最低(" + historyMin + "),推送: " + z.getTitle() + " | price=" + z.getPrice());
-                keep.add(z);
-            } else {
-                System.out.println("高于历史最低(" + historyMin + "),不推: " + z.getTitle() + " | price=" + z.getPrice());
+            } else if (detail) {
+                if (!tagHit) {
+                    System.out.println("无目标标签,不推: [" + tagText + "] | " + z.getTitle());
+                } else {
+                    System.out.println("有标签但高于历史最低(" + historyMin + "),不推: [" + tagText + "] | " + z.getTitle());
+                }
             }
         }
         return keep;
@@ -188,6 +225,8 @@ public class ZdmCrawler {
                     //评论和点值数量的值后面会跟着'k','w'这种字符,将它们转换一下方便后面过滤和排序
                     zdm.setComments(Utils.strNumberFormat(zdm.getComments()));
                     zdm.setVoted(Utils.strNumberFormat(zdm.getVoted()));
+                    //抽取平台角标标签(新低/白菜价等), 供标签过滤与邮件展示使用
+                    zdm.setTags(Utils.joinTagNames(zdm.getArticleTags(), zdm.getTeseTags()));
 
                     //转化为毫秒级时间戳
                     String timestampStr = zdm.getTimesort() + "000";
