@@ -298,23 +298,29 @@ public class ZdmCrawler {
 
     private static List<Zdm> processFilter(Collection<Zdm> zdms, int minVoted, int minComments, boolean detail) {
         //黑词过滤
-        HashSet<String> blackWords = Utils.readFile("./black_words.txt");
+        HashSet<String> blackWords = Utils.readFile("black_words.txt");
         blackWords.removeIf(StringUtils::isBlank);
 
         //白词过滤内容
-        HashSet<String> whiteWords = Utils.readFile("./white_words.txt");
+        HashSet<String> whiteWords = Utils.readFile("white_words.txt");
         whiteWords.removeIf(StringUtils::isBlank);
+
+        //统一的黑词判定: 标题命中任意一个黑词即排除。两种模式下都生效
+        java.util.function.Predicate<Zdm> notBlack = z -> StringUtils.isBlank(
+                StreamUtils.findFirst(blackWords, w -> z.getTitle().contains(w)));
 
         if (whiteWords.isEmpty()) {
             //如果白词文件为空，则使用原来的黑词模式
             if (detail)
                 System.out.println("whiteWords is empty, running in blackWords mode. blackWords list:\n" + String.join(",", blackWords));
-            zdms = StreamUtils.filter(zdms, z -> StringUtils.isBlank(StreamUtils.findFirst(blackWords, w -> z.getTitle().contains(w))));
+            zdms = StreamUtils.filter(zdms, notBlack);
         } else {
-            //如果白词文件不为空，则启用新的白词模式，仅发送包含白名单中的商品优惠信息
+            //如果白词文件不为空，则启用新的白词模式：仅保留标题命中白词的商品，同时仍然应用黑词排除
             if (detail)
-                System.out.println("whiteWords is not empty, running in whiteWords mode. whiteWords list:\n" + String.join(",", whiteWords));
-            zdms = StreamUtils.filter(zdms, z -> !StringUtils.isBlank(StreamUtils.findFirst(whiteWords, w -> z.getTitle().contains(w))));
+                System.out.println("whiteWords is not empty, running in whiteWords mode. whiteWords list:\n"
+                        + String.join(",", whiteWords) + "\nblackWords list:\n" + String.join(",", blackWords));
+            zdms = StreamUtils.filter(zdms, z -> !StringUtils.isBlank(
+                    StreamUtils.findFirst(whiteWords, w -> z.getTitle().contains(w))) && notBlack.test(z));
         }
 
         //从数据库中取出已推送的优惠信息id
